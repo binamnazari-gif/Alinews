@@ -11,7 +11,8 @@ from urllib.parse import quote
 from flask import Flask, jsonify, request, Response
 
 GEMINI_KEY = os.environ["GEMINI_API_KEY"]
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+MODEL = os.environ.get("GEMINI_MODEL") or "gemini-3.8-flash"
+USE_SEARCH = os.environ.get("USE_SEARCH") == "1"   # جست‌وجوی گوگل در API فقط در پلن پولی هست
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")          # رمز دکمه «تحلیل تازه»
 TG_TOKEN = os.environ.get("TELEGRAM_TOKEN")              # اختیاری
 TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID")             # اختیاری
@@ -53,9 +54,15 @@ SOURCES = {
 
 QUERY = "Iran (military OR missile OR nuclear OR strike OR IRGC OR drone OR navy OR air defense OR sanctions)"
 
+MODE_SEARCH = ("برای خواندن خود مقالات و گزارش‌ها از جست‌وجوی گوگل استفاده کن "
+               "(به‌ویژه اندیشکده‌ها، گزارش‌های تخصصی دفاعی، تصاویر ماهواره‌ای و نهادهای بین‌المللی) و فقط به تیتر اکتفا نکن.")
+MODE_HEADLINES = ("تو به اینترنت دسترسی نداری و فقط همین تیترها را داری. هیچ جزئیات یا واقعیتی را از خودت اضافه نکن "
+                  "و دربارهٔ رویدادهای اخیر از حافظه‌ات ادعا نساز؛ هرچه از تیترها برنمی‌آید «نامشخص» است. "
+                  "در پایانِ جمع‌بندی یک جمله بنویس که این تحلیل فقط بر پایهٔ تیترهاست و متن مقالات خوانده نشده.")
+
 PROMPT = """تو تحلیلگر ارشد امور نظامی و امنیتی هستی و فقط درباره ایران تحلیل می‌کنی. امروز {today} است.
-ورودی: تیترهای چند روز اخیر، هرکدام با نوع و گرایش منبع. برای خواندن خود مقالات و گزارش‌ها از جست‌وجوی گوگل استفاده کن
-(به‌ویژه اندیشکده‌ها، گزارش‌های تخصصی دفاعی، تصاویر ماهواره‌ای و نهادهای بین‌المللی) و فقط به تیتر اکتفا نکن.
+ورودی: تیترهای چند روز اخیر، هرکدام با نوع و گرایش منبع.
+{mode}
 
 قواعد ضدفریب:
 ۱. ادعا را از واقعیت جدا کن. چیزی را «تأییدشده» بنویس فقط اگر دست‌کم دو منبع از دو خانوادهٔ مستقل گزارش کرده باشند
@@ -106,15 +113,22 @@ def collect():
 
 
 def ask_gemini(prompt):
+    body = {"contents": [{"parts": [{"text": prompt}]}]}
+    if USE_SEARCH:
+        body["tools"] = [{"google_search": {}}]
     r = requests.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent",
-        params={"key": GEMINI_KEY},
-        json={"contents": [{"parts": [{"text": prompt}]}], "tools": [{"google_search": {}}]},
-        timeout=240,
+        params={"key": GEMINI_KEY}, json=body, timeout=240,
     )
-    r.raise_for_status()
-    c = r.json()["candidates"][0]
-    text = "".join(p.get("text", "") for p in c["content"]["parts"])
+    if r.status_code != 200:
+        raise RuntimeError(f"Gemini {r.status_code}: {r.text[:400]}")
+    data = r.json()
+    if not data.get("candidates"):
+        raise RuntimeError("Gemini پاسخی نداد: " + str(data.get("promptFeedback")))
+    c = data["candidates"][0]
+    text = "".join(p.get("text", "") for p in c.get("content", {}).get("parts", []))
+    if not text:
+        raise RuntimeError("پاسخ خالی از Gemini: " + str(c.get("finishReason")))
     chunks = c.get("groundingMetadata", {}).get("groundingChunks", [])
     return text, sorted({ch["web"].get("title", "") for ch in chunks if "web" in ch} - {""})
 
@@ -133,7 +147,9 @@ def build_report():
     if not items:
         raise RuntimeError("هیچ تیتری پیدا نشد؛ اینترنت سرور یا Google News را بررسی کن.")
     lines = "\n".join(f"- [{SOURCES[i['d']]}] {i['d']} — {i['t']} ({i['date']})" for i in items)
-    text, srcs = ask_gemini(PROMPT.format(today=time.strftime("%Y-%m-%d")) + lines)
+    mode = MODE_SEARCH if USE_SEARCH else MODE_HEADLINES
+    text, srcs = ask_gemini(PROMPT.format(today=time.strftime("%Y-%m-%d"), mode=mode) + lines)
+    srcs = srcs or sorted({i["d"] for i in items})
     with LOCK:
         STATE.update(text=text, sources=srcs, n=len(items), error="",
                      time=time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()))
@@ -181,7 +197,7 @@ function show(d){
  if(!d.text){$('#r').innerHTML='<p>'+(d.error||'هنوز گزارشی ساخته نشده؛ چند دقیقه صبر کن یا «تحلیل تازه» را بزن.')+'</p>';return}
  $('#r').innerHTML=md(d.text);
  $('#m').textContent='به‌روزرسانی: '+d.time+' — '+d.n+' تیتر از منابع مختلف';
- $('#s').textContent='منابعی که مدل خوانده: '+(d.sources||[]).join('، ')}
+ $('#s').textContent='منابع این گزارش: '+(d.sources||[]).join('، ')}
 async function load(){show(await (await fetch('/api/report')).json())}
 async function refresh(){
  const b=$('#b');b.disabled=true;b.textContent='در حال تحلیل…';
