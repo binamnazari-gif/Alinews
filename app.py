@@ -112,16 +112,23 @@ def collect():
         return [i for r in ex.map(fetch_domain, SOURCES) for i in r]
 
 
-def ask_gemini(prompt):
-    body = {"contents": [{"parts": [{"text": prompt}]}]}
-    if USE_SEARCH:
-        body["tools"] = [{"google_search": {}}]
-    r = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent",
-        params={"key": GEMINI_KEY}, json=body, timeout=240,
-    )
-    if r.status_code != 200:
-        raise RuntimeError(f"Gemini {r.status_code}: {r.text[:400]}")
+FALLBACKS = ["gemini-3.6-flash", "gemini-3.5-flash-lite"]   # اگر مدل اصلی شلوغ یا در دسترس نبود
+RETRYABLE = (429, 500, 503, 504)
+
+
+def call_model(model, body):
+    for wait in (0, 10, 30):                      # تا سه بار با فاصله، چون شلوغی معمولاً موقتی است
+        time.sleep(wait)
+        r = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            params={"key": GEMINI_KEY}, json=body, timeout=240,
+        )
+        if r.status_code not in RETRYABLE:
+            return r
+    return r
+
+
+def parse_reply(r):
     data = r.json()
     if not data.get("candidates"):
         raise RuntimeError("Gemini پاسخی نداد: " + str(data.get("promptFeedback")))
@@ -131,6 +138,21 @@ def ask_gemini(prompt):
         raise RuntimeError("پاسخ خالی از Gemini: " + str(c.get("finishReason")))
     chunks = c.get("groundingMetadata", {}).get("groundingChunks", [])
     return text, sorted({ch["web"].get("title", "") for ch in chunks if "web" in ch} - {""})
+
+
+def ask_gemini(prompt):
+    body = {"contents": [{"parts": [{"text": prompt}]}]}
+    if USE_SEARCH:
+        body["tools"] = [{"google_search": {}}]
+    last = ""
+    for model in [MODEL] + [m for m in FALLBACKS if m != MODEL]:
+        r = call_model(model, body)
+        if r.status_code == 200:
+            return parse_reply(r)
+        last = f"{model} -> {r.status_code}: {r.text[:300]}"
+        if r.status_code != 404 and r.status_code not in RETRYABLE:
+            break                                 # مثلاً 400 یا 403: مشکل کلید/درخواست است، مدل دیگر کمکی نمی‌کند
+    raise RuntimeError("Gemini: " + last)
 
 
 def telegram(text):
