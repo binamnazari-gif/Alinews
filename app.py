@@ -4,10 +4,12 @@
 تیترهای ۳ روز اخیر را از منابع دسته‌بندی‌شده جمع می‌کند، Gemini (با جست‌وجوی گوگل) مقالات را می‌خواند
 و با قواعد ضدفریب یک جمع‌بندی فارسی می‌دهد. هر چند ساعت خودکار تازه می‌شود و (اختیاری) به تلگرام می‌رود.
 """
-import os, time, threading, requests
+import os, time, threading, re, requests
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import quote
+from urllib.parse import quote, unquote
+from html import unescape
+from html.parser import HTMLParser
 from flask import Flask, jsonify, request, Response
 
 GEMINI_KEY = os.environ["GEMINI_API_KEY"]
@@ -88,7 +90,7 @@ PROMPT = """تو تحلیلگر ارشد امور نظامی و امنیتی ه�
 تیترها:
 """
 
-STATE = {"text": "", "sources": [], "time": "", "n": 0, "error": ""}
+STATE = {"text": "", "sources": [], "links": [], "time": "", "n": 0, "error": ""}
 LOCK = threading.Lock()
 
 
@@ -164,18 +166,134 @@ def telegram(text):
             pass
 
 
+# ---------- جام جمشید (jjs.pub): ترجمهٔ فارسی خبرهای رسانه‌های خارجی ----------
+JJS = "https://jjs.pub"
+JJS_UA = {"User-Agent": "Mozilla/5.0 (personal news-analysis script)"}
+JJS_MAX, JJS_CHARS = 12, 3000                      # حداکثر خبر در هر اجرا، و حداکثر حرف از هر خبر
+IRAN_WORDS = ("ایران", "تهران", "سپاه", "هرمز", "خامنه", "پزشکیان")
+OUTLETS = {  # رسانهٔ اصلی خبر (از خودِ صفحهٔ جام جمشید خوانده می‌شود) -> نوع | گرایش
+    "reuters": "خبرگزاری | بین‌المللی", "apnews": "خبرگزاری | بین‌المللی",
+    "bloomberg": "رسانه اقتصادی | آمریکا", "wsj": "رسانه اقتصادی | آمریکا",
+    "nytimes": "رسانه | آمریکا", "theatlantic": "رسانه | آمریکا", "ft.com": "رسانه اقتصادی | بریتانیا",
+    "bbc": "رسانه | بریتانیا", "foxnews": "رسانه | آمریکا، محافظه‌کار",
+    "theamericanconservative": "رسانه | آمریکا، محافظه‌کار ضدمداخله",
+    "jpost": "رسانه | اسرائیل", "maariv": "رسانه | اسرائیل", "timesofisrael": "رسانه | اسرائیل",
+    "israelnationalnews": "رسانه | اسرائیل، راست‌گرا", "jns": "رسانه | اسرائیل/آمریکا، هوادار اسرائیل",
+    "newarab": "رسانه | قطر/منطقه", "aljazeera": "رسانه | قطر",
+    "moderndiplomacy": "رسانه تحلیلی | بین‌المللی",
+}
+JJS_INTRO = """
+
+متن خبرهای «جام جمشید» (jjs.pub):
+این‌ها ترجمه و بازنویسی ماشینی خبرِ یک رسانهٔ خارجی‌اند و منبع دست‌دوم حساب می‌شوند. هر خبر را به رسانهٔ اصلی‌اش نسبت بده
+(«به نقل از X، از طریق جام جمشید») و نوع و گرایش همان رسانه را در نظر بگیر. جام جمشید و رسانهٔ اصلی یک منبع‌اند، نه دو منبع مستقل؛
+اگر همان خبر در فهرست تیترهای بالا هم از همان رسانه آمده، آن را دوبار نشمار. چون ترجمهٔ ماشینی است، اسم‌ها و عددها را با احتیاط بیاور.
+"""
+MODE_TEXTS = ("تو به اینترنت دسترسی نداری و فقط همین تیترها و متن چند خبر را داری. هیچ جزئیات یا واقعیتی را از خودت اضافه نکن "
+              "و دربارهٔ رویدادهای اخیر از حافظه‌ات ادعا نساز؛ هرچه از این‌ها برنمی‌آید «نامشخص» است. "
+              "در پایانِ جمع‌بندی یک جمله بنویس که این تحلیل فقط بر پایهٔ تیترها و متن خبرهای ارائه‌شده است.")
+
+
+def label_for(orig):
+    o = orig.lower()
+    return next((v for k, v in OUTLETS.items() if k in o), "نوع و گرایش نامشخص")
+
+
+class _Paras(HTMLParser):                          # متن پاراگراف‌های صفحه را جمع می‌کند
+    def __init__(self):
+        super().__init__()
+        self.in_p, self.skip, self.cur, self.paras = 0, 0, [], []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style", "footer", "nav"):
+            self.skip += 1
+        elif tag == "p":
+            self.in_p, self.cur = 1, []
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style", "footer", "nav"):
+            self.skip = max(0, self.skip - 1)
+        elif tag == "p" and self.in_p:
+            self.in_p = 0
+            t = " ".join("".join(self.cur).split())
+            if len(t) > 40:
+                self.paras.append(t)
+
+    def handle_data(self, data):
+        if self.in_p and not self.skip:
+            self.cur.append(data)
+
+
+def page_text(h):
+    p = _Paras()
+    p.feed(h)
+    text = " ".join(p.paras)
+    if len(text) < 400:                            # اگر صفحه با <p> نوشته نشده بود
+        body = re.sub(r"(?s)<(script|style|footer|nav).*?</\1>", " ", h)
+        text = " ".join(unescape(re.sub(r"<[^>]+>", " ", body)).split())
+        i = text.find("در یک نگاه")
+        text = text[i:] if i >= 0 else text
+    return text[:JJS_CHARS]
+
+
+def fetch_jjs():
+    """لینک‌های jjs.pub/last24 را برمی‌دارد، خبرهای مربوط به ایران را یکی‌یکی می‌خواند."""
+    r = requests.get(f"{JJS}/last24", headers=JJS_UA, timeout=25)
+    r.raise_for_status()
+    seen, urls = set(), []
+    for m in re.finditer(r'href="((?:https://jjs\.pub)?/content/(\d+)/[^"]*)"', r.text):
+        path, cid = m.group(1), m.group(2)
+        if cid in seen:
+            continue
+        seen.add(cid)
+        if any(w in unquote(path) for w in IRAN_WORDS):      # عنوان در خودِ لینک هست
+            urls.append(path if path.startswith("http") else JJS + path)
+    out = []
+    for u in urls[:JJS_MAX]:
+        time.sleep(1)                                         # مؤدبانه: هر ثانیه یک صفحه
+        try:
+            h = requests.get(u, headers=JJS_UA, timeout=25).text
+        except Exception:
+            continue
+        t = re.search(r"<title>(.*?)</title>", h, re.S)
+        title = unescape(t.group(1)).split("|")[0].strip() if t else unquote(u.rsplit("/", 1)[-1]).replace("-", " ")
+        o = re.search(r'منبع اصلی[^<]*<a[^>]+href="([^"]+)"[^>]*>([^<]+)</a>', h)
+        orig_url, orig = (unescape(o.group(1)), unescape(o.group(2)).strip()) if o else ("", "")
+        if not orig:
+            m2 = re.search(r"منتشر شده در:\s*(?:<[^>]+>\s*)*([A-Za-z0-9.\-]+)", h)
+            orig = m2.group(1) if m2 else "نامشخص"
+        d = re.search(r'published_time[^>]*content="([^"]+)"', h) or re.search(r'content="([^"]+)"[^>]*published_time', h)
+        text = page_text(h)
+        if len(text) > 150:
+            out.append({"title": title, "orig": orig, "orig_url": orig_url, "date": d.group(1)[:10] if d else "", "text": text})
+    return out
+
+
 def build_report():
     items = collect()
-    if not items:
-        raise RuntimeError("هیچ تیتری پیدا نشد؛ اینترنت سرور یا Google News را بررسی کن.")
-    lines = "\n".join(f"- [{SOURCES[i['d']]}] {i['d']} — {i['t']} ({i['date']})" for i in items)
-    mode = MODE_SEARCH if USE_SEARCH else MODE_HEADLINES
-    text, srcs = ask_gemini(PROMPT.format(today=time.strftime("%Y-%m-%d"), mode=mode) + lines)
+    try:
+        jjs = fetch_jjs()
+    except Exception as e:                         # خرابی جام جمشید نباید کل گزارش را بخواباند
+        jjs = []
+        print("jjs.pub failed:", e)
+    if not items and not jjs:
+        raise RuntimeError("هیچ خبری پیدا نشد؛ اینترنت سرور یا Google News را بررسی کن.")
+    lines = "\n".join(f"- [{SOURCES[i['d']]}] {i['d']} — {i['t']} ({i['date']})" for i in items) or "(تیتری پیدا نشد)"
+    extra = ""
+    if jjs:
+        extra = JJS_INTRO + "\n".join(
+            f"\n[{k}] {j['title']}\nرسانهٔ اصلی: {j['orig']} ({label_for(j['orig'])}) | تاریخ: {j['date']}\nمتن: {j['text']}"
+            for k, j in enumerate(jjs, 1))
+    mode = MODE_SEARCH if USE_SEARCH else (MODE_TEXTS if jjs else MODE_HEADLINES)
+    text, srcs = ask_gemini(PROMPT.format(today=time.strftime("%Y-%m-%d"), mode=mode) + lines + extra)
     srcs = srcs or sorted({i["d"] for i in items})
+    if jjs:
+        srcs = ["jjs.pub (جام جمشید)"] + srcs
+    links = [{"t": j["title"], "o": j["orig"], "u": j["orig_url"]} for j in jjs if j["orig_url"].startswith("http")]
     with LOCK:
-        STATE.update(text=text, sources=srcs, n=len(items), error="",
+        STATE.update(text=text, sources=srcs, links=links, n=len(items) + len(jjs), error="",
                      time=time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()))
-    telegram(text)
+    telegram(text + ("\n\nبخشی از خبرها: جام جمشید (jjs.pub)" if jjs else ""))
 
 
 def loop():
@@ -198,16 +316,16 @@ header{display:flex;justify-content:space-between;align-items:center;gap:1rem;fl
 h1{font-size:1.3rem;margin:0}
 button{font:inherit;background:var(--acc);color:var(--card);border:0;border-radius:6px;padding:.4rem 1rem;cursor:pointer}
 button:disabled{opacity:.6}button:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
-#m,#s,#n{color:var(--mute);font-size:.85rem}
+#m,#s,#n,#c{color:var(--mute);font-size:.85rem}
 #r{background:var(--card);border-radius:8px;padding:.5rem 1.25rem 1rem;margin-top:1rem}
 h2{font-size:1.05rem;color:var(--acc);margin:1.5rem 0 .2rem}
 h2:first-of-type+p{font-size:1.1rem;border-right:4px solid var(--acc);padding-right:.9rem}
 p{margin:.4rem 0}li{list-style:disc inside;margin:.35rem .4rem}
-</style></head><body><main>
+#l{margin-top:1rem;font-size:.9rem}#l a{color:var(--acc)}\n</style></head><body><main>
 <header><h1>تحلیل نظامی ایران</h1><button id="b" onclick="refresh()">تحلیل تازه</button></header>
 <div id="m"></div><div id="r"><p>در حال بارگذاری…</p></div>
-<p id="s"></p>
-<p id="n">این خلاصه ابزار کمکی است و ممکن است اشتباه کند؛ ادعاهای کلیدی را با منبع اصلی تطبیق بده.</p>
+<div id="l"></div><p id="s"></p>
+<p id="c"></p><p id="n">این خلاصه ابزار کمکی است و ممکن است اشتباه کند؛ ادعاهای کلیدی را با منبع اصلی تطبیق بده.</p>
 </main><script>
 const $=s=>document.querySelector(s);
 function md(t){return t.split('\\n').map(l=>{
@@ -215,11 +333,16 @@ function md(t){return t.split('\\n').map(l=>{
  if(l.startsWith('## '))return '<h2>'+l.slice(3)+'</h2>';
  if(/^[-*] /.test(l))return '<li>'+l.slice(2)+'</li>';
  return l.trim()?'<p>'+l+'</p>':''}).join('')}
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+function render2(d){
+ const L=d.links||[];
+ $('#l').innerHTML=L.length?'<h2>منابع اصلی خبرهای جام جمشید</h2><ul>'+L.map(x=>'<li><a href="'+esc(x.u)+'" target="_blank" rel="noopener">'+esc(x.t)+'</a> — '+esc(x.o)+'</li>').join('')+'</ul>':'';
+ $('#c').textContent=(d.sources||[]).some(s=>s.startsWith('jjs.pub'))?'بخشی از خبرهای این گزارش از «جام جمشید» (jjs.pub) گرفته شده؛ با سپاس از ترجمه و گردآوری آن‌ها. متن خبرها بازنشر نشده و فقط تحلیل ماشینی اینجاست.':''}
 function show(d){
  if(!d.text){$('#r').innerHTML='<p>'+(d.error||'هنوز گزارشی ساخته نشده؛ چند دقیقه صبر کن یا «تحلیل تازه» را بزن.')+'</p>';return}
  $('#r').innerHTML=md(d.text);
  $('#m').textContent='به‌روزرسانی: '+d.time+' — '+d.n+' تیتر از منابع مختلف';
- $('#s').textContent='منابع این گزارش: '+(d.sources||[]).join('، ')}
+ render2(d);$('#s').textContent='منابع این گزارش: '+(d.sources||[]).join('، ')}
 async function load(){show(await (await fetch('/api/report')).json())}
 async function refresh(){
  const b=$('#b');b.disabled=true;b.textContent='در حال تحلیل…';
