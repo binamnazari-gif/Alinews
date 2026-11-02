@@ -136,16 +136,37 @@ FALLBACKS = ["gemini-3.6-flash", "gemini-3.5-flash-lite"]   # اگر مدل اص
 RETRYABLE = (429, 500, 503, 504)
 
 
-def call_model(model, body):
-    for wait in (0, 10, 30):                      # تا سه بار با فاصله، چون شلوغی معمولاً موقتی است
+GEMINI_TIMEOUT = int(os.environ.get("GEMINI_TIMEOUT", "150"))   # ثانیه؛ صبر برای پاسخ هر درخواست
+GEMINI_BUDGET = int(os.environ.get("GEMINI_BUDGET", "540"))     # سقف کل زمان برای همهٔ مدل‌ها و تلاش‌ها
+
+
+def call_model(model, body, deadline):
+    """تا سه بار تلاش می‌کند. 429/5xx و قطعی شبکه را موقتی می‌داند و با فاصله دوباره می‌زند؛
+    اما اگر مدل در مهلت جواب نداد (Timeout)، تکرار روی همان مدل بی‌فایده است و فوراً برمی‌گردد
+    تا مدل بعدی امتحان شود. خروجی: (آخرین پاسخ یا None، آخرین خطای شبکه یا None)."""
+    r, err = None, None
+    for wait in (0, 10, 30):
+        if time.time() + wait > deadline - 10:
+            break
         time.sleep(wait)
-        r = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-            params={"key": GEMINI_KEY}, json=body, timeout=240,
-        )
+        try:
+            resp = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                params={"key": GEMINI_KEY}, json=body,
+                timeout=(10, max(10, min(GEMINI_TIMEOUT, deadline - time.time()))),
+            )
+        except requests.exceptions.Timeout as e:
+            err = f"timeout: {e!r}"[:200]
+            print(f"gemini: {model} timed out")
+            break
+        except requests.exceptions.RequestException as e:
+            err = repr(e)[:200]
+            print(f"gemini: {model} network error: {err}")
+            continue
+        r = resp
         if r.status_code not in RETRYABLE:
-            return r
-    return r
+            return r, None
+    return r, err
 
 
 def parse_reply(r):
@@ -164,14 +185,21 @@ def ask_gemini(prompt):
     body = {"contents": [{"parts": [{"text": prompt}]}]}
     if USE_SEARCH:
         body["tools"] = [{"google_search": {}}]
-    last = ""
+    deadline = time.time() + GEMINI_BUDGET
+    last = "هیچ تلاشی انجام نشد (مهلت کل تمام شد)"
     for model in [MODEL] + [m for m in FALLBACKS if m != MODEL]:
-        r = call_model(model, body)
-        if r.status_code == 200:
+        if time.time() > deadline - 20:
+            break
+        r, err = call_model(model, body, deadline)
+        if r is not None and r.status_code == 200:
             return parse_reply(r)
-        last = f"{model} -> {r.status_code}: {r.text[:300]}"
-        if r.status_code != 404 and r.status_code not in RETRYABLE:
-            break                                 # مثلاً 400 یا 403: مشکل کلید/درخواست است، مدل دیگر کمکی نمی‌کند
+        if r is not None:
+            last = f"{model} -> {r.status_code}: {r.text[:300]}"
+            if r.status_code != 404 and r.status_code not in RETRYABLE:
+                break                             # مثلاً 400 یا 403: مشکل کلید/درخواست است، مدل دیگر کمکی نمی‌کند
+        else:
+            last = f"{model} -> {err}"
+        print("gemini: falling back after:", last[:200])
     raise RuntimeError("Gemini: " + last)
 
 
