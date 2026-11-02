@@ -75,6 +75,8 @@ PROMPT = """تو تحلیلگر ارشد امور نظامی و امنیتی ه�
 ۴. به تاریخ دقت کن؛ خبر قدیمی، ویدیوی بازنشرشده یا تصویر بی‌تاریخ را علامت بزن.
 ۵. نظر تحلیلگران و افسران بازنشسته را با نام و وابستگی‌شان بیاور؛ اجماع و اختلاف را جدا کن.
 ۶. هرجا مطمئن نیستی بنویس «نامشخص». حدس را حدس بنام. پیش‌بینی را واقعیت جلوه نده.
+۷. بخش «اجماع» و «اختلاف‌نظر» فقط از نظرِ تحلیلگران یا افسرانِ نام‌برده در متن‌های ارائه‌شده ساخته می‌شود. اگر چنین متنی نیست، بنویس «در داده‌های این اجرا نظر تحلیلگر نام‌برده‌ای نبود» و چیزی نساز؛ گرایش عمومی یک رسانه یا اندیشکده را جای نظر تحلیلگر ننویس.
+۸. یک ادعا نباید هم‌زمان در «تأییدشده» و «تأییدنشده» بیاید. اگر اصلِ رویداد تأیید شده ولی جزئیات یا علتش مورد اختلاف است، رویداد را در تأییدشده‌ها و جزئیاتِ اختلافی را در ادعاها بنویس.
 
 خروجی را فقط به فارسی و با همین سرفصل‌ها (مارک‌داون) بنویس:
 ## جمع‌بندی نهایی
@@ -239,6 +241,7 @@ def page_text(h):
 def fetch_jjs():
     """لینک‌های jjs.pub/last24 را برمی‌دارد، خبرهای مربوط به ایران را یکی‌یکی می‌خواند."""
     r = requests.get(f"{JJS}/last24", headers=JJS_UA, timeout=25)
+    print(f"jjs: last24 status={r.status_code} bytes={len(r.text)}")
     r.raise_for_status()
     seen, urls = set(), []
     for m in re.finditer(r'href="((?:https://jjs\.pub)?/content/(\d+)/[^"]*)"', r.text):
@@ -248,13 +251,21 @@ def fetch_jjs():
         seen.add(cid)
         if any(w in unquote(path) for w in IRAN_WORDS):      # عنوان در خودِ لینک هست
             urls.append(path if path.startswith("http") else JJS + path)
+    print(f"jjs: {len(seen)} links found, {len(urls)} about Iran")
+    if not seen:
+        print("jjs: page starts with:", r.text[:300].replace("\n", " "))
     out = []
     for u in urls[:JJS_MAX]:
         time.sleep(1)                                         # مؤدبانه: هر ثانیه یک صفحه
         try:
-            h = requests.get(u, headers=JJS_UA, timeout=25).text
-        except Exception:
+            resp = requests.get(u, headers=JJS_UA, timeout=25)
+        except Exception as e:
+            print("jjs: page failed:", repr(e))
             continue
+        if resp.status_code != 200:
+            print("jjs: page status", resp.status_code)
+            continue
+        h = resp.text
         t = re.search(r"<title>(.*?)</title>", h, re.S)
         title = unescape(t.group(1)).split("|")[0].strip() if t else unquote(u.rsplit("/", 1)[-1]).replace("-", " ")
         o = re.search(r'منبع اصلی[^<]*<a[^>]+href="([^"]+)"[^>]*>([^<]+)</a>', h)
@@ -264,8 +275,11 @@ def fetch_jjs():
             orig = m2.group(1) if m2 else "نامشخص"
         d = re.search(r'published_time[^>]*content="([^"]+)"', h) or re.search(r'content="([^"]+)"[^>]*published_time', h)
         text = page_text(h)
-        if len(text) > 150:
+        if len(text) <= 150:
+            print("jjs: page text too short:", len(text))
+        else:
             out.append({"title": title, "orig": orig, "orig_url": orig_url, "date": d.group(1)[:10] if d else "", "text": text})
+    print(f"jjs: kept {len(out)} items")
     return out
 
 
@@ -275,7 +289,7 @@ def build_report():
         jjs = fetch_jjs()
     except Exception as e:                         # خرابی جام جمشید نباید کل گزارش را بخواباند
         jjs = []
-        print("jjs.pub failed:", e)
+        print("jjs.pub failed:", repr(e))
     if not items and not jjs:
         raise RuntimeError("هیچ خبری پیدا نشد؛ اینترنت سرور یا Google News را بررسی کن.")
     lines = "\n".join(f"- [{SOURCES[i['d']]}] {i['d']} — {i['t']} ({i['date']})" for i in items) or "(تیتری پیدا نشد)"
