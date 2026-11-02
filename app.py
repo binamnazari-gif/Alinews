@@ -5,6 +5,7 @@
 و با قواعد ضدفریب یک جمع‌بندی فارسی می‌دهد. هر چند ساعت خودکار تازه می‌شود و (اختیاری) به تلگرام می‌رود.
 """
 import os, time, threading, re, requests
+from datetime import datetime, timedelta, timezone
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from collections import Counter
@@ -63,7 +64,7 @@ MODE_HEADLINES = ("تو به اینترنت دسترسی نداری و فقط ه
                   "و دربارهٔ رویدادهای اخیر از حافظه‌ات ادعا نساز؛ هرچه از تیترها برنمی‌آید «نامشخص» است. "
                   "در بخش «محدودیت داده» بنویس که تحلیل فقط بر پایهٔ تیترهاست و متن مقالات خوانده نشده.")
 
-PROMPT = """تو تحلیلگر ارشد امور نظامی و امنیتی ایران هستی و برای یک مخاطب فارسی‌زبان گزارش کوتاه و دقیق می‌نویسی. فقط دربارهٔ ایران. امروز {today} است.
+PROMPT = """تو تحلیلگر ارشد امور نظامی و امنیتی ایران هستی و برای یک مخاطب فارسی‌زبان گزارش کوتاه و دقیق می‌نویسی. فقط دربارهٔ ایران. امروز {today} است (به وقت تهران).
 ورودی: تیترهای چند روز اخیر، هرکدام با نوع و گرایش منبع. {mode}
 
 قواعد اعتبارسنجی:
@@ -72,7 +73,9 @@ PROMPT = """تو تحلیلگر ارشد امور نظامی و امنیتی ا�
 ۳. خبر تک‌منبعی یا با منبع ناشناس حداکثر «محتمل» است. خبر قدیمی، ویدیوی بازنشرشده یا بی‌تاریخ را «قدیمی» علامت بزن.
 ۴. هرچه از ورودی برنمی‌آید «نامشخص» است. حدس را حدس بنام و پیش‌بینی را واقعیت جلوه نده.
 ۵. نظر تحلیلگران یا افسران فقط وقتی بیاید که در ورودی با نام و وابستگی آمده باشد؛ گرایش عمومی یک رسانه را جای نظر تحلیلگر ننویس.
-۶. هر ادعا فقط یک‌بار و فقط در یک وضعیت بیاید.
+۶. هر ادعا در بخش «ادعاها و اعتبار» فقط یک‌بار و فقط با یک وضعیت ثبت شود. هر ادعایی که در خلاصه یا ارزیابی آمده، باید در همان بخش یک خط داشته باشد.
+۷. خلاصه، ارزیابی و شاخص‌ها نباید ادعایی را قوی‌تر از وضعیتش در بخش «ادعاها و اعتبار» بگویند. ادعای «محتمل» را با «احتمالاً» یا «به گفتهٔ …» بنویس، و ادعای هر طرف را در همه‌جا، از جمله جملهٔ اول خلاصه، با نام همان طرف بیاور. هیچ ادعای تأییدنشده‌ای را با عبارت‌هایی مثل «شواهد نشان می‌دهد» مثل واقعیت ننویس.
+۸. سطح اطمینان نباید بالاتر از وضعیت مهم‌ترین ادعای خلاصه باشد: اگر آن ادعا «محتمل» یا «ادعای یک طرف» است، سطح اطمینان حداکثر «متوسط» است و اگر تک‌منبعی است «کم».
 
 سبک: رسمی، فشرده و بدون تکرار؛ جمله‌های کوتاه؛ بدون مقدمه و تعارف؛ حداکثر حدود ۴۵۰ کلمه؛ بخشِ بی‌داده را حذف کن.
 فقط با مارک‌داونِ ساده بنویس (سرفصل با ## ، پررنگ با ** ، فهرست با «- »؛ بدون جدول و بدون خط جداکننده) و دقیقاً با همین بخش‌ها:
@@ -96,6 +99,14 @@ PROMPT = """تو تحلیلگر ارشد امور نظامی و امنیتی ا�
 
 تیترها:
 """
+
+# ایران از ۱۴۰۱ ساعت تابستانی ندارد و همیشه UTC+3:30 است؛ offset ثابت به tzdata سرور وابسته نیست.
+TEHRAN = timezone(timedelta(hours=3, minutes=30))
+
+
+def tehran_now(fmt="%Y-%m-%d %H:%M"):
+    return datetime.now(TEHRAN).strftime(fmt)
+
 
 STATE = {"text": "", "sources": [], "links": [], "time": "", "n": 0, "error": ""}
 LOCK = threading.Lock()
@@ -367,15 +378,14 @@ def build_report():
             f"\n[{k}] {j['title']}\nرسانهٔ اصلی: {j['orig']} ({label_for(j['orig'])}) | تاریخ: {j['date']}\nمتن: {j['text']}"
             for k, j in enumerate(jjs, 1))
     mode = MODE_SEARCH if USE_SEARCH else (MODE_TEXTS if jjs else MODE_HEADLINES)
-    text, srcs = ask_gemini(PROMPT.format(today=time.strftime("%Y-%m-%d"), mode=mode) + lines + extra)
+    text, srcs = ask_gemini(PROMPT.format(today=tehran_now("%Y-%m-%d"), mode=mode) + lines + extra)
     srcs = srcs or sorted({i["d"] for i in items})
     if jjs:
         srcs = ["jjs.pub (جام جمشید)"] + srcs
     links = [{"t": j["title"], "o": j["orig"], "u": j["orig_url"]} for j in jjs if j["orig_url"].startswith("http")]
+    stamp = tehran_now() + " به وقت تهران"
     with LOCK:
-        STATE.update(text=text, sources=srcs, links=links, n=len(items) + len(jjs), error="",
-                     time=time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()))
-    stamp = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
+        STATE.update(text=text, sources=srcs, links=links, n=len(items) + len(jjs), error="", time=stamp)
     telegram(text + ("\n\nمنبع بخشی از خبرها: جام جمشید (jjs.pub)" if jjs else ""),
              f"<b>گزارش نظامی ایران</b> · {stamp}")
 
