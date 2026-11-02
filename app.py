@@ -7,7 +7,8 @@
 import os, time, threading, re, requests
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import quote, unquote
+from collections import Counter
+from urllib.parse import quote, unquote, urljoin, urlparse
 from html import unescape
 from html.parser import HTMLParser
 from flask import Flask, jsonify, request, Response
@@ -272,22 +273,55 @@ def page_text(h):
     return text[:JJS_CHARS]
 
 
+def _norm(x):
+    """ي و ك عربی را به ی و ک فارسی تبدیل می‌کند (اسلاگ‌های جام جمشید هر دو را قاطی دارند)."""
+    return x.replace("\u064a", "\u06cc").replace("\u0643", "\u06a9")
+
+
+def _strip_tags(x):
+    return " ".join(unescape(re.sub(r"<[^>]+>", " ", x)).split())
+
+
+def jjs_candidates(html):
+    """همهٔ لینک‌های هم‌دامنه را همراه با متن لینک می‌خواند و آن‌هایی را نگه می‌دارد که شناسهٔ عددی دارند
+    و در آدرس یا متنشان کلمهٔ مربوط به ایران هست. به شکل آدرس (نقل‌قول تکی/دوتایی، لینک نسبی/مطلق،
+    با یا بدون اسلاگ و اسلش پایانی) وابسته نیست."""
+    seen, urls = set(), []
+    for m in re.finditer(r"""<a\b[^>]*?\bhref\s*=\s*["']([^"']+)["'][^>]*>(.*?)</a>""", html, re.S | re.I):
+        href, text = unescape(m.group(1)).strip(), _strip_tags(m.group(2))
+        full = urljoin(JJS + "/last24", href).split("#")[0]
+        p = urlparse(full)
+        if p.netloc.replace("www.", "") != "jjs.pub" or p.path.strip("/") in ("", "last24"):
+            continue
+        if not re.search(r"\d{3,}", p.path):                      # خبر شناسهٔ عددی دارد
+            continue
+        seen.add(full)
+        if full not in urls and any(_norm(w) in _norm(unquote(full) + " " + text) for w in IRAN_WORDS):
+            urls.append(full)
+    return seen, urls
+
+
+def jjs_debug(html):
+    hrefs = re.findall(r"""href\s*=\s*["']([^"']+)["']""", html, re.I)
+    pages = [h for h in hrefs if not re.search(r"\.(css|js|png|jpe?g|svg|ico|webp|woff2?)(\?|$)", h, re.I)]
+    shapes = Counter("/" + (urlparse(urljoin(JJS + "/last24", h)).path.split("/")[1:2] or [""])[0][:15] for h in pages)
+    print(f"jjs[debug]: <a> tags={html.count('<a ')} hrefs={len(hrefs)} '/content/'={html.count('/content/')}"
+          f" next_data={'__NEXT_DATA__' in html}")
+    print("jjs[debug]: first path segments:", shapes.most_common(8))
+    print("jjs[debug]: sample hrefs:", [unquote(h)[:70] for h in pages[:15]])
+    print("jjs[debug]: rss/api hints:", re.findall(r"""<link[^>]+(?:rss|atom)[^>]*>""", html, re.I)[:2],
+          re.findall(r"""["'](/(?:api|_next/data|feed|rss)[^"']{0,60})""", html)[:5])
+
+
 def fetch_jjs():
     """لینک‌های jjs.pub/last24 را برمی‌دارد، خبرهای مربوط به ایران را یکی‌یکی می‌خواند."""
     r = requests.get(f"{JJS}/last24", headers=JJS_UA, timeout=25)
     print(f"jjs: last24 status={r.status_code} bytes={len(r.text)}")
     r.raise_for_status()
-    seen, urls = set(), []
-    for m in re.finditer(r'href="((?:https://jjs\.pub)?/content/(\d+)/[^"]*)"', r.text):
-        path, cid = m.group(1), m.group(2)
-        if cid in seen:
-            continue
-        seen.add(cid)
-        if any(w in unquote(path) for w in IRAN_WORDS):      # عنوان در خودِ لینک هست
-            urls.append(path if path.startswith("http") else JJS + path)
+    seen, urls = jjs_candidates(r.text)
     print(f"jjs: {len(seen)} links found, {len(urls)} about Iran")
-    if not seen:
-        print("jjs: page starts with:", r.text[:300].replace("\n", " "))
+    if not urls:
+        jjs_debug(r.text)            # الگوی لینک‌ها را در لاگ نشان می‌دهد تا بشود فیلتر را درست کرد
     out = []
     for u in urls[:JJS_MAX]:
         time.sleep(1)                                         # مؤدبانه: هر ثانیه یک صفحه
