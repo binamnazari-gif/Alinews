@@ -82,9 +82,17 @@ PROMPT = """تو تحلیلگر ارشد امور نظامی و امنیتی ا�
 ۱۲. شاخص‌های ۷۲ ساعت باید رویدادهایی باشند که ممکن است رخ بدهند یا ندهند و از بیرون قابل مشاهده‌اند. رویداد قطعی یا برنامه‌ریزی‌شده (مثل پایان یک انتخابات) شاخص نیست؛ به‌جایش واکنش نامطمئن پس از آن را بنویس.
 ۱۳. گزارش یا ادعای قدیمی را فقط وقتی بیاور که به ادعای فعلی ربط دارد و آن را تضعیف یا گمراه‌کننده می‌کند، با تاریخ انتشارش؛ وگرنه حذفش کن.
 
-سبک: رسمی، فشرده و بدون تکرار؛ جمله‌های کوتاه؛ بدون مقدمه و تعارف؛ حداکثر حدود ۴۵۰ کلمه؛ بخشِ بی‌داده را حذف کن.
-فقط با مارک‌داونِ ساده بنویس (سرفصل با ## ، پررنگ با ** ، فهرست با «- »؛ بدون جدول و بدون خط جداکننده) و دقیقاً با همین بخش‌ها:
+۱۴. هر ادعا یک گوینده و یک وضعیت دارد و در همهٔ بخش‌ها (ادعاها، خلاصه، ارزیابی، هشدارها) همان است. گوینده را فقط با آنچه در ورودی آمده بنویس: اگر مقام ناشناس است، «به نقل از مقام‌های ناشناس (رسانهٔ X)» بنویس، نه «مقام‌های آمریکا». ادعای یک رسانه یا نهاد (مثل محاصرهٔ دریایی یا انفجار نفت‌کش) را بی‌نام گوینده مثل واقعیت ننویس.
+۱۵. دو رسانه‌ای که یکی از دیگری نقل کرده یا هر دو از یک خبرگزاری گرفته‌اند یک منبع‌اند؛ اگر از ورودی روشن نیست که مستقل‌اند، «تأییدشده» نزن.
+۱۶. نام و عدد برآمده از ترجمهٔ ماشینی (نام آژانس‌ها، شناسه‌ها، رقم‌های دقیق) را فقط وقتی بیاور که معنای روشن دارند؛ وگرنه حذف کن یا «به نقل از ترجمهٔ ماشینی» اضافه کن. هر مکان یا رویدادی که در شاخص‌ها می‌آید باید پیش‌تر در ادعاها یا ارزیابی آمده باشد؛ مورد تازه از خودت اضافه نکن.
 
+سبک: رسمی، فشرده و بدون تکرار؛ جمله‌های کوتاه؛ بدون مقدمه و تعارف؛ حداکثر حدود ۴۵۰ کلمه؛ بخشِ بی‌داده را حذف کن.
+فقط با مارک‌داونِ ساده بنویس (سرفصل با ## ، پررنگ با ** ، فهرست با «- »؛ بدون جدول و بدون خط جداکننده) و دقیقاً با همین بخش‌ها و به همین ترتیب. ترتیب نوشتن عمداً با ترتیب نمایش فرق دارد (سیستم بعداً جابه‌جا می‌کند): اول «ادعاها و اعتبار» را بنویس و بعد خلاصه و ارزیابی را فقط از ادعاهایی بساز که در همان بخش ثبت کرده‌ای؛ چیزی که در آن لیست نیست وارد خلاصه یا ارزیابی نشود:
+
+## ادعاها و اعتبار
+(هر ادعای مهم یک خط، به این شکل: - **تأییدشده** ← یا **محتمل** یا **ادعای طرفِ X** یا **متناقض** یا **قدیمی** — متن ادعا. منابع: ... )
+## هشدارهای فریب
+(۲ تا ۴ مورد کوتاه: هم‌منشأبودن منابع، تبلیغات یک‌طرفه، ناهمخوانی‌ها.)
 ## خلاصهٔ اجرایی
 (حداکثر ۴ جمله؛ جملهٔ اول مهم‌ترین نتیجه. جملهٔ آخر: **سطح اطمینان: زیاد/متوسط/کم** و دلیلش در چند کلمه.)
 ## ارزیابی وضعیت
@@ -93,10 +101,6 @@ PROMPT = """تو تحلیلگر ارشد امور نظامی و امنیتی ا�
 - **هسته‌ای:** ...
 - **هرمز و انرژی:** ...
 (هر مورد یک تا دو جمله؛ مورد بی‌داده را ننویس.)
-## ادعاها و اعتبار
-(هر ادعای مهم یک خط، به این شکل: - **تأییدشده** ← یا **محتمل** یا **ادعای طرفِ X** یا **متناقض** یا **قدیمی** — متن ادعا. منابع: ... )
-## هشدارهای فریب
-(۲ تا ۴ مورد کوتاه: هم‌منشأبودن منابع، تبلیغات یک‌طرفه، ناهمخوانی‌ها.)
 ## شاخص‌های ۷۲ ساعت آینده
 (۳ تا ۵ مورد به شکل «اگر X ← یعنی Y».)
 ## محدودیت داده
@@ -222,6 +226,9 @@ def tg_html(md):
     return "\n".join(out)
 
 
+HASHTAGS = os.environ.get("TG_HASHTAGS", "#گزارش_وضعیت #ایران")   # آخر آخرین پیام؛ برای پیدا کردن گزارش‌ها لابه‌لای پیام‌ها
+
+
 def telegram(md, header=""):
     if not (TG_TOKEN and TG_CHAT):
         return
@@ -233,6 +240,8 @@ def telegram(md, header=""):
             cur = ""
         cur += x
     chunks.append(cur)
+    if HASHTAGS:
+        chunks[-1] = chunks[-1].rstrip() + "\n\n" + HASHTAGS
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     for c in chunks:
         try:
@@ -250,7 +259,9 @@ def telegram(md, header=""):
 # ---------- جام جمشید (jjs.pub): ترجمهٔ فارسی خبرهای رسانه‌های خارجی ----------
 JJS = "https://jjs.pub"
 JJS_UA = {"User-Agent": "Mozilla/5.0 (personal news-analysis script)"}
-JJS_MAX, JJS_CHARS = 12, 3000                      # حداکثر خبر در هر اجرا، و حداکثر حرف از هر خبر
+JJS_MAX = int(os.environ.get("JJS_MAX", "20"))               # حداکثر خبر در هر اجرا
+JJS_ITEM_MAX = int(os.environ.get("JJS_ITEM_MAX", "30000"))  # سقف ایمنی برای یک خبر (فقط صفحه‌های غیرعادی را کوتاه می‌کند)
+JJS_TOTAL = int(os.environ.get("JJS_TOTAL", "120000"))       # سقف مجموع حرف خبرها در یک درخواست Gemini؛ خبر نیمه‌کاره نمی‌رود
 IRAN_WORDS = ("ایران", "تهران", "سپاه", "هرمز", "خامنه", "پزشکیان")
 OUTLETS = {  # رسانهٔ اصلی خبر (از خودِ صفحهٔ جام جمشید خوانده می‌شود) -> نوع | گرایش
     "reuters": "خبرگزاری | بین‌المللی", "apnews": "خبرگزاری | بین‌المللی",
@@ -313,7 +324,7 @@ def page_text(h):
         text = " ".join(unescape(re.sub(r"<[^>]+>", " ", body)).split())
         i = text.find("در یک نگاه")
         text = text[i:] if i >= 0 else text
-    return text[:JJS_CHARS]
+    return text
 
 
 def _norm(x):
@@ -365,8 +376,9 @@ def fetch_jjs():
     print(f"jjs: {len(seen)} links found, {len(urls)} about Iran")
     if not urls:
         jjs_debug(r.text)            # الگوی لینک‌ها را در لاگ نشان می‌دهد تا بشود فیلتر را درست کرد
-    out = []
-    for u in urls[:JJS_MAX]:
+    out, total, cut, skipped = [], 0, 0, 0
+    batch = urls[:JJS_MAX]
+    for idx, u in enumerate(batch):
         time.sleep(1)                                         # مؤدبانه: هر ثانیه یک صفحه
         try:
             resp = requests.get(u, headers=JJS_UA, timeout=25)
@@ -389,21 +401,42 @@ def fetch_jjs():
         if len(text) <= 150:
             print("jjs: page text too short:", len(text))
         else:
+            was_cut = len(text) > JJS_ITEM_MAX
+            text = text[:JJS_ITEM_MAX]
+            if out and total + len(text) > JJS_TOTAL:           # خبر را نیمه‌کاره نمی‌فرستیم؛ همین‌جا می‌ایستیم
+                skipped += len(batch) - idx
+                print(f"jjs: input budget reached ({total} chars); {skipped} item(s) not read")
+                break
+            total += len(text)
+            cut += was_cut
+            print(f"jjs: item {len(out) + 1}: {len(text)} chars{' (CUT)' if was_cut else ''} ... {text[-50:]}")
             out.append({"title": title, "orig": orig, "orig_url": orig_url, "date": d.group(1)[:10] if d else "", "text": text})
-    print(f"jjs: kept {len(out)} items")
-    return out
+    print(f"jjs: kept {len(out)} items, {total} chars total")
+    return out, {"cut": cut, "skipped": skipped + max(0, len(urls) - JJS_MAX)}
 
 
-def limits_text(n_head, n_src, n_jjs):
-    parts = []
-    if n_head:
-        parts.append(f"{n_head} تیتر از {n_src} منبع")
-    if n_jjs:
-        parts.append(f"متن {n_jjs} خبر از جام جمشید (حداکثر {JJS_CHARS} حرف اول هر خبر)")
-    t = "تحلیل بر پایهٔ " + " و ".join(parts) + " است"
-    t += ("، به‌اضافهٔ جست‌وجوی گوگل توسط مدل که مستقل بازبینی نشده." if USE_SEARCH
-          else "؛ متن مقاله‌های منابع دیگر خوانده نشده.")
-    return t
+SECTION_ORDER = ("خلاصه", "ارزیابی", "ادعاها", "هشدار", "شاخص", "محدودیت")   # ترتیب نمایش
+
+
+def reorder_sections(text):
+    """مدل ابتدا «ادعاها» را می‌نویسد تا خلاصه از روی آن ساخته شود؛ اینجا به ترتیب خواندن برمی‌گردد.
+    اگر ساختار قابل‌تشخیص نبود، متن دست‌نخورده می‌ماند."""
+    parts = re.split(r"(?m)^(?=##\s)", text)
+    pre, secs = parts[0], parts[1:]
+    if len(secs) < 2:
+        return text
+
+    def rank(sec):
+        head = sec.splitlines()[0]
+        return next((n for n, k in enumerate(SECTION_ORDER) if k in head), len(SECTION_ORDER))
+
+    ordered = sorted(secs, key=rank)             # مرتب‌سازی پایدار: بخش ناشناس جای نسبی خود را حفظ می‌کند
+    return (pre.strip() + "\n\n" if pre.strip() else "") + "\n\n".join(x.strip() for x in ordered)
+
+
+def limits_text(n_src, n_jjs):
+    """فقط تعداد منابع خوانده‌شده: سایت‌هایی که تیترشان آمده + خبرهای جام جمشید که متنشان خوانده شده."""
+    return f"تعداد منابع خوانده‌شده: {n_src + n_jjs}"
 
 
 def set_limits(text, limits):
@@ -417,9 +450,9 @@ def set_limits(text, limits):
 def build_report():
     items = collect()
     try:
-        jjs = fetch_jjs()
+        jjs, jstats = fetch_jjs()
     except Exception as e:                         # خرابی جام جمشید نباید کل گزارش را بخواباند
-        jjs = []
+        jjs, jstats = [], {}
         print("jjs.pub failed:", repr(e))
     if not items and not jjs:
         raise RuntimeError("هیچ خبری پیدا نشد؛ اینترنت سرور یا Google News را بررسی کن.")
@@ -431,7 +464,7 @@ def build_report():
             for k, j in enumerate(jjs, 1))
     mode = MODE_SEARCH if USE_SEARCH else (MODE_TEXTS if jjs else MODE_HEADLINES)
     text, srcs = ask_gemini(PROMPT.format(today=tehran_now("%Y-%m-%d"), mode=mode) + lines + extra)
-    text = set_limits(text, limits_text(len(items), len({i["d"] for i in items}), len(jjs)))
+    text = set_limits(reorder_sections(text), limits_text(len({i["d"] for i in items}), len(jjs)))
     srcs = srcs or sorted({i["d"] for i in items})
     if jjs:
         srcs = ["jjs.pub (جام جمشید)"] + srcs
@@ -440,7 +473,7 @@ def build_report():
     with LOCK:
         STATE.update(text=text, sources=srcs, links=links, n=len(items) + len(jjs), error="", time=stamp)
     telegram(text + ("\n\nمنبع بخشی از خبرها: جام جمشید (jjs.pub)" if jjs else ""),
-             f"<b>گزارش نظامی ایران</b> · {stamp}")
+             f"<b>گزارش وضعیت</b> · {stamp}")
 
 
 def loop():
