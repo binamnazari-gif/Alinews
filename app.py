@@ -100,6 +100,43 @@ def tehran_now(fmt="%Y-%m-%d %H:%M"):
     return datetime.now(TEHRAN).strftime(fmt)
 
 
+JALALI_MONTHS = ("فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
+                 "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند")
+
+
+def gregorian_to_jalali(gy, gm, gd):
+    """تبدیل میلادی به شمسی (الگوریتم حسابیِ چرخهٔ ۳۳ ساله؛ بدون وابستگی به کتابخانهٔ بیرونی)."""
+    cum = (0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334)
+    gy2 = gy + 1 if gm > 2 else gy
+    days = 355666 + 365 * gy + (gy2 + 3) // 4 - (gy2 + 99) // 100 + (gy2 + 399) // 400 + gd + cum[gm - 1]
+    jy = -1595 + 33 * (days // 12053)
+    days %= 12053
+    jy += 4 * (days // 1461)
+    days %= 1461
+    if days > 365:
+        jy += (days - 1) // 365
+        days = (days - 1) % 365
+    if days < 186:
+        return jy, 1 + days // 31, 1 + days % 31
+    return jy, 7 + (days - 186) // 30, 1 + (days - 186) % 30
+
+
+FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+
+
+def jalali_label(now=None):
+    """روز و ماه شمسی به حروف و رقم فارسی، بر پایهٔ تاریخ تهران؛ مثلاً «۱۲ آبان»."""
+    n = now or datetime.now(TEHRAN)
+    _, jm, jd = gregorian_to_jalali(n.year, n.month, n.day)
+    return f"{jd} {JALALI_MONTHS[jm - 1]}".translate(FA_DIGITS)
+
+
+def report_header():
+    """«گزارش وضعیت» پررنگ، و با فاصله از آن روز و ساعت (به وقت تهران، رقم فارسی)؛ مثلاً: گزارش وضعیت   ۱۲ آبان   ۰۰:۳۲"""
+    gap = "\u2003\u2003"                                  # دو فاصلهٔ پهن (em space)؛ تلگرام آن‌ها را نمی‌بلعد
+    return f"<b>گزارش وضعیت</b>{gap}{jalali_label()}{gap}{tehran_now('%H:%M').translate(FA_DIGITS)}"
+
+
 STATE = {"text": "", "sources": [], "links": [], "time": "", "n": 0, "error": ""}
 LOCK = threading.Lock()
 
@@ -210,7 +247,7 @@ def tg_html(md):
 
 
 AI_BYLINE = os.environ.get(
-    "AI_BYLINE", "🤖 این گزارش را هوش مصنوعی نوشته است")
+    "AI_BYLINE", "🤖 بررسی و نوشته شده توسط AI")
 HASHTAGS = os.environ.get("TG_HASHTAGS", "#گزارش_وضعیت #ایران")   # آخر آخرین پیام؛ برای پیدا کردن گزارش‌ها لابه‌لای پیام‌ها
 
 
@@ -457,7 +494,7 @@ def build_report():
     with LOCK:
         STATE.update(text=text, sources=srcs, links=links, n=len(items) + len(jjs), error="", time=stamp)
     footer = limits_text(len({i["d"] for i in items}), len(jjs)) + ("\nمنبع بخشی از خبرها: جام جمشید (jjs.pub)" if jjs else "")
-    telegram(text, f"<b>گزارش وضعیت</b> · {stamp}", footer)
+    telegram(text, report_header(), footer)
 
 
 def loop():
