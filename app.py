@@ -18,8 +18,25 @@ GEMINI_KEY = os.environ["GEMINI_API_KEY"]
 MODEL = os.environ.get("GEMINI_MODEL") or "gemini-3.8-flash"
 USE_SEARCH = os.environ.get("USE_SEARCH") == "1"   # جست‌وجوی گوگل در API فقط در پلن پولی هست
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")          # رمز دکمه «تحلیل تازه»
-TG_TOKEN = os.environ.get("TELEGRAM_TOKEN")              # اختیاری
-TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID")             # اختیاری
+
+
+def _clean_token(t):
+    """فاصله، نقل‌قول و پیشوند «bot» را که گاهی همراه توکن کپی می‌شود برمی‌دارد."""
+    t = (t or "").strip().strip("\"'").strip()
+    return t[3:] if t.lower().startswith("bot") and ":" in t[3:] else t
+
+
+def _clean_chat(c):
+    """لینک t.me/نام و نام بدون @ را به @نام تبدیل می‌کند؛ شناسهٔ عددی (مثل -100...) دست‌نخورده می‌ماند."""
+    c = (c or "").strip().strip("\"'").strip()
+    m = re.match(r"(?:https?://)?t\.me/([A-Za-z][A-Za-z0-9_]{4,})/?$", c)
+    if m:
+        return "@" + m.group(1)
+    return "@" + c if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,}", c) else c
+
+
+TG_TOKEN = _clean_token(os.environ.get("TELEGRAM_TOKEN"))      # اختیاری
+TG_CHAT = _clean_chat(os.environ.get("TELEGRAM_CHAT_ID"))      # اختیاری
 REFRESH_HOURS = float(os.environ.get("REFRESH_HOURS", "8"))
 DAYS = int(os.environ.get("DAYS", "3"))
 
@@ -254,11 +271,51 @@ HASHTAGS = os.environ.get("TG_HASHTAGS", "#گزارش_وضعیت #ایران")  
 TG_LIMIT = 3900          # سقف تلگرام ۴۰۹۶ حرف است؛ کمی کمتر می‌گیریم چون تگ‌های HTML هم شمرده می‌شوند
 
 
+def _safe(e):
+    """متن خطا را بدون توکن برمی‌گرداند (آدرس درخواست تلگرام توکن دارد و لاگ‌های Actions ممکن است عمومی باشند)."""
+    return repr(e).replace(TG_TOKEN, "<token>") if TG_TOKEN else repr(e)
+
+
+def tg_api(method, **params):
+    r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/{method}", json=params, timeout=20)
+    try:
+        j = r.json()
+    except Exception:
+        j = {}
+    return r.status_code, j
+
+
+def tg_diagnose():
+    """بعد از شکست ارسال، علت را در لاگ می‌نویسد (توکن هرگز چاپ نمی‌شود)."""
+    try:
+        code, j = tg_api("getMe")
+        if not j.get("ok"):
+            print(f"telegram[diag]: getMe failed ({code}): {j.get('description')} -> the token is wrong")
+            return
+        me = j["result"]
+        print(f"telegram[diag]: token OK, bot is @{me.get('username')}")
+        code, j = tg_api("getChat", chat_id=TG_CHAT)
+        if not j.get("ok"):
+            print(f"telegram[diag]: getChat failed ({code}): {j.get('description')} -> wrong chat id, or the bot is not in that channel")
+            return
+        c = j["result"]
+        print(f"telegram[diag]: chat found, type={c.get('type')}, title={c.get('title')!r}")
+        if c.get("type") == "private":
+            print("telegram[diag]: this is a PRIVATE chat id, not a channel -> set TELEGRAM_CHAT_ID to the channel (@username or -100...)")
+        code, j = tg_api("getChatMember", chat_id=TG_CHAT, user_id=me["id"])
+        m = j.get("result") or {}
+        print(f"telegram[diag]: bot status in chat = {m.get('status')}, can_post_messages = {m.get('can_post_messages')}")
+    except Exception as e:
+        print("telegram[diag] failed:", _safe(e))
+
+
 def telegram(md, header="", footer=""):
     """گزارش یک متن پاراگرافی است و معمولاً در یک پیام جا می‌شود؛ فقط اگر از سقف تلگرام بلندتر شد،
     در مرز پاراگراف به چند پیام تقسیم می‌شود. پانویس و هشتگ‌ها همیشه آخر آخرین پیام‌اند."""
     if not (TG_TOKEN and TG_CHAT):
-        return
+        print("telegram: SKIPPED - TELEGRAM_TOKEN or TELEGRAM_CHAT_ID is empty in this run "
+              f"(token set: {bool(TG_TOKEN)}, chat id set: {bool(TG_CHAT)})")
+        return None                       # ارسال انجام نشد چون تلگرام تنظیم نشده (شکست حساب نمی‌شود)
     paras = [header] + re.split(r"\n\s*\n", tg_html(md)) + [footer, AI_BYLINE, HASHTAGS]
     chunks, cur = [], ""
     for x in (p.strip() for p in paras if p and p.strip()):
@@ -270,17 +327,25 @@ def telegram(md, header="", footer=""):
             cur = f"{cur}\n\n{p}" if cur else p
     chunks.append(cur)
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+    sent, diagnosed = 0, False
     for c in chunks:
         try:
             r = requests.post(url, json={"chat_id": TG_CHAT, "text": c.strip(), "parse_mode": "HTML",
                                          "disable_web_page_preview": True}, timeout=20)
-            if r.status_code == 400:                  # اگر تگی خراب بود، بدون قالب بفرست
+            if r.status_code == 400 and "parse" in r.text.lower():     # اگر تگی خراب بود، بدون قالب بفرست
                 plain = unescape(re.sub(r"<[^>]+>", "", c)).strip()
                 r = requests.post(url, json={"chat_id": TG_CHAT, "text": plain}, timeout=20)
-            if r.status_code != 200:
-                print("telegram:", r.status_code, r.text[:200])
+            if r.status_code == 200:
+                sent += 1
+                continue
+            print("telegram: FAILED", r.status_code, r.text[:200])
         except Exception as e:
-            print("telegram failed:", repr(e))
+            print("telegram: FAILED", _safe(e))
+        if not diagnosed:
+            diagnosed = True
+            tg_diagnose()
+    print(f"telegram: sent {sent} of {len(chunks)} message(s)")
+    return sent == len(chunks)
 
 
 # ---------- جام جمشید (jjs.pub): ترجمهٔ فارسی خبرهای رسانه‌های خارجی ----------
@@ -494,7 +559,19 @@ def build_report():
     with LOCK:
         STATE.update(text=text, sources=srcs, links=links, n=len(items) + len(jjs), error="", time=stamp)
     footer = limits_text(len({i["d"] for i in items}), len(jjs)) + ("\nمنبع بخشی از خبرها: جام جمشید (jjs.pub)" if jjs else "")
-    telegram(text, report_header(), footer)
+    ok = telegram(text, report_header(), footer)
+    if ok is False and os.environ.get("GITHUB_ACTIONS"):
+        raise RuntimeError("ارسال به تلگرام ناموفق بود؛ علت در خطوط telegram بالاتر در لاگ آمده است.")
+    if ok:
+        mark_sent()
+
+
+def mark_sent():
+    """بعد از ارسال موفق، تاریخ تهران را در docs/last_sent.txt می‌نویسد تا اجراهای بعدیِ همان روز
+    گزارش تکراری نفرستند (فایل workflow آن را می‌خواند و همراه docs کامیت می‌شود)."""
+    if os.path.isdir("docs"):
+        with open("docs/last_sent.txt", "w", encoding="utf-8") as f:
+            f.write(tehran_now("%Y-%m-%d"))
 
 
 def loop():
