@@ -4,7 +4,7 @@
 تیترهای ۳ روز اخیر را از منابع دسته‌بندی‌شده جمع می‌کند، Gemini (با جست‌وجوی گوگل) مقالات را می‌خواند
 و با قواعد ضدفریب یک جمع‌بندی فارسی می‌دهد. هر چند ساعت خودکار تازه می‌شود و (اختیاری) به تلگرام می‌رود.
 """
-import os, time, threading, re, requests
+import os, time, threading, re, json, requests
 from datetime import datetime, timedelta, timezone
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
@@ -38,7 +38,7 @@ def _clean_chat(c):
 TG_TOKEN = _clean_token(os.environ.get("TELEGRAM_TOKEN"))      # اختیاری
 TG_CHAT = _clean_chat(os.environ.get("TELEGRAM_CHAT_ID"))      # اختیاری
 REFRESH_HOURS = float(os.environ.get("REFRESH_HOURS", "8"))
-DAYS = int(os.environ.get("DAYS", "3"))
+DAYS = int(os.environ.get("DAYS", "2"))     # پنجرهٔ تیترها (روز)؛ گزارش روزی یک بار است، پس ۲ کافی و کم‌تکرارتر از ۳ است
 
 # دامنه: «نوع | گرایش». برچسب‌ها را خودت ویرایش کن؛ همین برچسب‌ها به مدل می‌گویند هر ادعا از کدام طرف آمده.
 SOURCES = {
@@ -80,8 +80,8 @@ MODE_SEARCH = ("برای خواندن خود مقالات و گزارش‌ها �
 MODE_HEADLINES = ("تو به اینترنت دسترسی نداری و فقط همین تیترها را داری. هیچ جزئیات یا واقعیتی را از خودت اضافه نکن "
                   "و دربارهٔ رویدادهای اخیر از حافظه‌ات ادعا نساز؛ هرچه از تیترها برنمی‌آید «نامشخص» است.")
 
-PROMPT = """تو تحلیلگر امور نظامی و امنیتی ایران هستی و برای مردم عادیِ فارسی‌زبان «گزارش وضعیت» می‌نویسی: دقیق، بی‌طرف، ساده و بدون اغراق. فقط دربارهٔ ایران. امروز {today} است (به وقت تهران).
-ورودی: تیترهای چند روز اخیر، هرکدام با نوع و گرایش منبع. {mode}
+PROMPT = """تو تحلیلگر امور نظامی و امنیتی ایران هستی و برای مردم عادیِ فارسی‌زبان «گزارش وضعیت» می‌نویسی: دقیق، بی‌طرف، ساده و بدون اغراق. بخش اصلی دربارهٔ وضع نظامی و امنیتی ایران است و یک بخش کوتاه دربارهٔ مهم‌ترین موضوعات دیگرِ خبرهای جام جمشید. امروز {today} است (به وقت تهران).
+ورودی: تیترهای چند روز اخیر (هرکدام با نوع و گرایش منبع) و متن خبرهای ۲۴ ساعت اخیر جام جمشید، شامل خبرهای غیرنظامی. {mode}
 
 قواعد اعتبارسنجی (برای هر ادعا):
 ۱. «تأییدشده» فقط وقتی که دست‌کم دو منبع از دو خانوادهٔ مستقل گزارش کرده باشند. رسانه‌ای که «به نقل از»، «به گزارش» یا «طبق تحلیل» رسانهٔ دیگر می‌نویسد، یا از یک خبرگزاری گرفته، با همان رسانه یک منبع است؛ اگر از ورودی روشن نیست مستقل‌اند، «تأییدشده» نزن.
@@ -93,18 +93,23 @@ PROMPT = """تو تحلیلگر امور نظامی و امنیتی ایران �
 
 خروجی را دقیقاً در دو قسمت بنویس.
 
-قسمت اول با خط «=== یادداشت ===» شروع می‌شود (به مخاطب نشان داده نمی‌شود و فقط برای نظم دادن به کار توست): حداکثر ۱۴ خط، هر خط یک ادعا به این شکل:
+قسمت اول با خط «=== یادداشت ===» شروع می‌شود (به مخاطب نشان داده نمی‌شود و فقط برای نظم دادن به کار توست): حداکثر ۲۰ خط، هر خط یک ادعا (ادعاهای بخش «موضوعات مهم دیگر» هم) به این شکل:
 - وضعیت | گوینده | ادعا | منابع
 وضعیت یکی از این‌هاست: تأییدشده، محتمل، ادعای طرفِ X، متناقض، قدیمی. اگر دو بخشِ یک خبر قوت متفاوتی دارند، دو خط بنویس.
 
 قسمت دوم با خط «=== گزارش ===» شروع می‌شود و متن نهایی است:
-- ساختار به این ترتیب است: (۱) یک پاراگراف کوتاه، یکی دو جمله، با مهم‌ترین تحول و نتیجهٔ کلی؛ (۲) فهرستی با «- » از خبرهای اصلی؛ (۳) خط «در ۷۲ ساعت آینده باید دید:» و زیرش دو سه مورد با «- »؛ (۴) یک پاراگراف پایانی. حداکثر ۳۵۰ کلمه. بدون سرفصل، بدون جدول، بدون خط جداکننده، و بدون خط خالی میان موارد فهرست.
-- فهرست اصلی ۵ تا ۸ مورد دارد؛ هر مورد یک خبر یا ادعای مستقل در یک تا دو جمله است، به ترتیب: میدان نظامی، دریایی و انرژی؛ بعد دیپلماسی و پروندهٔ هسته‌ای. هر مورد یک گوینده و یک وضعیت دارد.
+- گزارش دو پیام تلگرام است که با خط «=== موضوعات دیگر ===» از هم جدا می‌شوند.
+- پیام اول، وضع نظامی و امنیتی ایران، حداکثر ۳۰۰ کلمه: (۱) یک پاراگراف کوتاه، یکی دو جمله، با مهم‌ترین تحول و نتیجهٔ کلی؛ (۲) فهرستی ۴ تا ۶ موردی با «- »؛ (۳) خط «**در ۷۲ ساعت آینده باید دید:**» و زیرش دو سه مورد با «- »؛ (۴) یک پاراگراف پایانی. هر مورد فهرست با یک برچسب کوتاه پررنگ شروع می‌شود («**نظامی:**»، «**هرمز:**»، «**دیپلماسی:**»، «**هسته‌ای:**») و بعد یک یا دو جمله می‌آید؛ هر مورد یک ادعای مستقل با یک گوینده و یک وضعیت است. ترتیب: میدان نظامی، دریایی و انرژی؛ بعد دیپلماسی و پروندهٔ هسته‌ای. بدون جدول، بدون خط جداکننده و بدون خط خالی میان موارد فهرست.
 - موارد «۷۲ ساعت آینده» رویدادهای نامطمئن و قابل مشاهده‌اند که پیش‌تر در متن آمده‌اند؛ رویداد قطعی مثل پایان یک انتخابات نشانه نیست.
+- پیام دوم، بعد از خط «=== موضوعات دیگر ===»، فقط یک فهرست ۳ تا ۵ موردی با «- » است (حداکثر ۱۵۰ کلمه) از مهم‌ترین خبرهای غیرنظامی جام جمشید (سیاست داخلی و خارجی، اقتصاد و انرژی، جامعه، فناوری، محیط زیست و ...)، هر مورد با برچسب پررنگ موضوع مثل «**اقتصاد:**». مهم‌ترین یعنی بیشترین اثر بر زندگی مردم یا منطقه، تازه‌تر بودن، و اینکه چند خبر دربارهٔ آن آمده؛ خبرهای یک موضوع را یک مورد کن و چیزی را که در پیام اول آمده تکرار نکن. هر مورد یک یا دو جمله است، با نام رسانهٔ اصلی و همان قواعد اعتبارسنجی. اگر خبر غیرنظامی مهمی نبود، خط «=== موضوعات دیگر ===» و فهرستش را اصلاً ننویس.
+- نقل‌قول تلگرام: وقتی عین گفتهٔ یک شخص یا نهادِ مشخص مهم است (تهدید، پیشنهاد، تکذیب، ادعای کلیدی)، همان جمله را در یک بلاک نقل‌قول بیاور: دو خط پشت‌سرهم، بلافاصله زیر مورد فهرستِ مربوط (بدون خط خالی)، که با «> » شروع می‌شوند:
+> «عین جملهٔ گفته‌شده»
+> — نام گوینده، رسانه‌ای که نقل کرده (اگر از متن جام جمشید است: «ترجمهٔ جام جمشید»)
+مورد فهرست باید بدون نقل‌قول هم یک جملهٔ کامل باشد (ادعا را با کلمات خودت و نام گوینده بنویس) و نقل‌قول فقط عین عبارت را زیرش نشان می‌دهد. جمله باید حرف‌به‌حرف از متن ورودی (تیتر یا متن خبر) کپی شود و حداکثر ۲۵ کلمه باشد؛ چیزی را که خودت خلاصه یا بازنویسی کرده‌ای هرگز در نقل‌قول نگذار (سیستم نقل‌قولی را که عیناً در ورودی نباشد حذف می‌کند). حداکثر ۲ نقل‌قول در پیام اول و ۱ در پیام دوم. از مقام ناشناس نقل‌قول نیاور. اگر جملهٔ عینیِ مناسب نیست، نقل‌قول نیاور و با جملهٔ خودت و نام گوینده بنویس. در یادداشت، خطِ مربوط را با «[نقل‌قول]» علامت بزن.
 - هیچ جملهٔ خبری‌ای نباید از بیرون «یادداشت» بیاید. «تأییدشده» را بی‌قید و واقعیت‌وار بنویس؛ «محتمل» را با «احتمالاً» یا «گزارش‌ها می‌گویند، اما تأیید مستقل نشده»؛ ادعای هر طرف را همیشه با نام گوینده («به ادعای سپاه»، «به گفتهٔ مقام‌های ناشناس آمریکایی به نقل از ...»). ادعا را قوی‌تر از وضعیتش نگو.
 - پاراگراف پایانی، یکی دو جمله: **سطح اطمینان: زیاد/متوسط/کم** با دلیل کوتاه، و در صورت لزوم مهم‌ترین هشدار (ادعای یک‌طرفه، بازنشر از یک منبع، ناهمخوانی). سطح اطمینان بالاتر از وضعیت مهم‌ترین ادعای متن نباشد: اگر آن «محتمل» یا «ادعای یک طرف» است، حداکثر «متوسط».
 - امضا یا توضیح دربارهٔ هوش مصنوعی ننویس؛ سیستم خودش اضافه می‌کند.
-- زبان ساده برای مردم عادی: اصطلاح تخصصی را در چند کلمه توضیح بده یا حذف کن؛ جمله‌های کوتاه؛ بدون مقدمه و تعارف.
+- زبان ساده برای مردم عادی: اصطلاح تخصصی و مخفف (مثل NPT) را در چند کلمه توضیح بده یا حذف کن؛ هر مورد باید بدون دانستن زمینه فهمیده شود؛ جمله‌های کوتاه؛ بدون مقدمه و تعارف.
 
 تیترها:
 """
@@ -148,6 +153,11 @@ def jalali_label(now=None):
     return f"{jd} {JALALI_MONTHS[jm - 1]}".translate(FA_DIGITS)
 
 
+def second_header():
+    gap = "\u2003\u2003"
+    return f"<b>موضوعات مهم دیگر</b>{gap}{jalali_label()}"
+
+
 def report_header():
     """«گزارش وضعیت» پررنگ، و با فاصله از آن روز و ساعت (به وقت تهران، رقم فارسی)؛ مثلاً: گزارش وضعیت   ۱۲ آبان   ۰۰:۳۲"""
     gap = "\u2003\u2003"                                  # دو فاصلهٔ پهن (em space)؛ تلگرام آن‌ها را نمی‌بلعد
@@ -183,7 +193,7 @@ RETRYABLE = (429, 500, 503, 504)
 
 
 GEMINI_TIMEOUT = int(os.environ.get("GEMINI_TIMEOUT", "150"))   # ثانیه؛ صبر برای پاسخ هر درخواست
-GEMINI_BUDGET = int(os.environ.get("GEMINI_BUDGET", "540"))     # سقف کل زمان برای همهٔ مدل‌ها و تلاش‌ها
+GEMINI_BUDGET = int(os.environ.get("GEMINI_BUDGET", "420"))     # سقف کل زمان برای همهٔ مدل‌ها و تلاش‌ها
 
 
 def call_model(model, body, deadline):
@@ -250,16 +260,30 @@ def ask_gemini(prompt):
 
 
 def tg_html(md):
-    """مارک‌داونِ ساده -> HTML تلگرام (تلگرام خودش ## و ** را نمی‌فهمد)."""
-    out = []
-    for line in md.splitlines():
-        line = line.strip().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    """مارک‌داونِ ساده -> HTML تلگرام (تلگرام خودش ## و ** و > را نمی‌فهمد).
+    خط‌های پشت‌سرهمِ «> » یک بلاک نقل‌قول (blockquote) می‌شوند."""
+    out, quote = [], []
+
+    def flush():
+        if quote:
+            out.append("<blockquote>" + "\n".join(quote) + "</blockquote>")
+            quote.clear()
+
+    for raw in md.splitlines():
+        raw = raw.strip()
+        is_q = raw.startswith("> ") or raw == ">"
+        line = (raw[2:] if is_q else raw).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         line = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", line)
+        if is_q:
+            quote.append(line)
+            continue
+        flush()
         if line.startswith("## "):
             line = "\n<b>■ " + re.sub(r"</?b>", "", line[3:]) + "</b>"
         elif line[:2] in ("- ", "* "):
             line = "• " + line[2:]
         out.append(line)
+    flush()
     return "\n".join(out)
 
 
@@ -309,14 +333,8 @@ def tg_diagnose():
         print("telegram[diag] failed:", _safe(e))
 
 
-def telegram(md, header="", footer=""):
-    """گزارش یک متن پاراگرافی است و معمولاً در یک پیام جا می‌شود؛ فقط اگر از سقف تلگرام بلندتر شد،
-    در مرز پاراگراف به چند پیام تقسیم می‌شود. پانویس و هشتگ‌ها همیشه آخر آخرین پیام‌اند."""
-    if not (TG_TOKEN and TG_CHAT):
-        print("telegram: SKIPPED - TELEGRAM_TOKEN or TELEGRAM_CHAT_ID is empty in this run "
-              f"(token set: {bool(TG_TOKEN)}, chat id set: {bool(TG_CHAT)})")
-        return None                       # ارسال انجام نشد چون تلگرام تنظیم نشده (شکست حساب نمی‌شود)
-    paras = [header] + re.split(r"\n\s*\n", tg_html(md)) + [footer, AI_BYLINE, HASHTAGS]
+def _chunks(paras):
+    """بندها را در مرز بند (و اگر لازم بود خط) به چند پیام زیر سقف تلگرام تقسیم می‌کند."""
     chunks, cur = [], ""
     for x in (p.strip() for p in paras if p and p.strip()):
         lines = x.split("\n") if len(x) > TG_LIMIT else [x]                   # بلاک بلند: اول در مرز خط
@@ -325,7 +343,25 @@ def telegram(md, header="", footer=""):
                 chunks.append(cur)
                 cur = ""
             cur = f"{cur}\n\n{p}" if cur else p
-    chunks.append(cur)
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+def telegram(blocks, footer=""):
+    """blocks: فهرستی از (تیتر، متن). هر بلاک پیام (یا پیام‌های) جدا خودش را می‌گیرد و با بلاک بعدی قاطی نمی‌شود؛
+    فقط اگر یک بلاک از سقف تلگرام بلندتر شد، در مرز بند تقسیم می‌شود. پانویس، امضا و هشتگ‌ها آخر آخرین پیام‌اند."""
+    if not (TG_TOKEN and TG_CHAT):
+        print("telegram: SKIPPED - TELEGRAM_TOKEN or TELEGRAM_CHAT_ID is empty in this run "
+              f"(token set: {bool(TG_TOKEN)}, chat id set: {bool(TG_CHAT)})")
+        return None                       # ارسال انجام نشد چون تلگرام تنظیم نشده (شکست حساب نمی‌شود)
+    blocks = [(h, m) for h, m in blocks if m and m.strip()]
+    chunks = []
+    for i, (header, md) in enumerate(blocks):
+        paras = [header] + re.split(r"\n\s*\n", tg_html(md))
+        if i == len(blocks) - 1:
+            paras += [footer, AI_BYLINE, HASHTAGS]
+        chunks += _chunks(paras)
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     sent, diagnosed = 0, False
     for c in chunks:
@@ -351,9 +387,10 @@ def telegram(md, header="", footer=""):
 # ---------- جام جمشید (jjs.pub): ترجمهٔ فارسی خبرهای رسانه‌های خارجی ----------
 JJS = "https://jjs.pub"
 JJS_UA = {"User-Agent": "Mozilla/5.0 (personal news-analysis script)"}
-JJS_MAX = int(os.environ.get("JJS_MAX", "20"))               # حداکثر خبر در هر اجرا
+JJS_ALL = os.environ.get("JJS_ALL", "1") != "0"                # ۱: همهٔ خبرهای ۲۴ ساعت اخیر؛ ۰: فقط خبرهای مربوط به ایران
+JJS_MAX = int(os.environ.get("JJS_MAX", "40"))               # حداکثر خبر در هر اجرا
 JJS_ITEM_MAX = int(os.environ.get("JJS_ITEM_MAX", "30000"))  # سقف ایمنی برای یک خبر (فقط صفحه‌های غیرعادی را کوتاه می‌کند)
-JJS_TOTAL = int(os.environ.get("JJS_TOTAL", "120000"))       # سقف مجموع حرف خبرها در یک درخواست Gemini؛ خبر نیمه‌کاره نمی‌رود
+JJS_TOTAL = int(os.environ.get("JJS_TOTAL", "200000"))       # سقف مجموع حرف خبرها در یک درخواست Gemini؛ خبر نیمه‌کاره نمی‌رود
 IRAN_WORDS = ("ایران", "تهران", "سپاه", "هرمز", "خامنه", "پزشکیان")
 OUTLETS = {  # رسانهٔ اصلی خبر (از خودِ صفحهٔ جام جمشید خوانده می‌شود) -> نوع | گرایش
     "reuters": "خبرگزاری | بین‌المللی", "apnews": "خبرگزاری | بین‌المللی",
@@ -368,7 +405,7 @@ OUTLETS = {  # رسانهٔ اصلی خبر (از خودِ صفحهٔ جام ج�
 }
 JJS_INTRO = """
 
-متن خبرهای «جام جمشید» (jjs.pub):
+متن همهٔ خبرهای ۲۴ ساعت اخیر «جام جمشید» (jjs.pub)، اعم از نظامی و غیرنظامی؛ خبرهای مربوط به ایران اول آمده‌اند:
 این‌ها ترجمه و بازنویسی ماشینی خبرِ یک رسانهٔ خارجی‌اند و منبع دست‌دوم حساب می‌شوند. هر خبر را به رسانهٔ اصلی‌اش نسبت بده
 («به نقل از X، از طریق جام جمشید») و نوع و گرایش همان رسانه را در نظر بگیر. جام جمشید و رسانهٔ اصلی یک منبع‌اند، نه دو منبع مستقل؛
 اگر همان خبر در فهرست تیترهای بالا هم از همان رسانه آمده، آن را دوبار نشمار. چون ترجمهٔ ماشینی است، اسم‌ها و عددها را با احتیاط بیاور.
@@ -429,10 +466,10 @@ def _strip_tags(x):
 
 
 def jjs_candidates(html):
-    """همهٔ لینک‌های هم‌دامنه را همراه با متن لینک می‌خواند و آن‌هایی را نگه می‌دارد که شناسهٔ عددی دارند
-    و در آدرس یا متنشان کلمهٔ مربوط به ایران هست. به شکل آدرس (نقل‌قول تکی/دوتایی، لینک نسبی/مطلق،
-    با یا بدون اسلاگ و اسلش پایانی) وابسته نیست."""
-    seen, urls = set(), []
+    """همهٔ لینک‌های خبرِ هم‌دامنه را به‌ترتیب ظاهر شدن برمی‌گرداند: (همهٔ خبرها، خبرهای مربوط به ایران).
+    خبر یعنی لینکی با شناسهٔ عددی؛ «مربوط به ایران» یعنی در آدرس یا متن لینک کلمهٔ IRAN_WORDS هست.
+    به شکل آدرس (نقل‌قول تکی/دوتایی، لینک نسبی/مطلق، با یا بدون اسلاگ و اسلش پایانی) وابسته نیست."""
+    seen, iran = [], []
     for m in re.finditer(r"""<a\b[^>]*?\bhref\s*=\s*["']([^"']+)["'][^>]*>(.*?)</a>""", html, re.S | re.I):
         href, text = unescape(m.group(1)).strip(), _strip_tags(m.group(2))
         full = urljoin(JJS + "/last24", href).split("#")[0]
@@ -441,10 +478,11 @@ def jjs_candidates(html):
             continue
         if not re.search(r"\d{3,}", p.path):                      # خبر شناسهٔ عددی دارد
             continue
-        seen.add(full)
-        if full not in urls and any(_norm(w) in _norm(unquote(full) + " " + text) for w in IRAN_WORDS):
-            urls.append(full)
-    return seen, urls
+        if full not in seen:
+            seen.append(full)
+        if full not in iran and any(_norm(w) in _norm(unquote(full) + " " + text) for w in IRAN_WORDS):
+            iran.append(full)
+    return seen, iran
 
 
 def jjs_debug(html):
@@ -460,12 +498,15 @@ def jjs_debug(html):
 
 
 def fetch_jjs():
-    """لینک‌های jjs.pub/last24 را برمی‌دارد، خبرهای مربوط به ایران را یکی‌یکی می‌خواند."""
+    """لینک‌های jjs.pub/last24 را برمی‌دارد و خبرها را یکی‌یکی کامل می‌خواند: اول خبرهای مربوط به ایران،
+    بعد بقیهٔ خبرهای ۲۴ ساعت اخیر (اگر JJS_ALL=0 باشد فقط خبرهای ایران)."""
     r = requests.get(f"{JJS}/last24", headers=JJS_UA, timeout=25)
     print(f"jjs: last24 status={r.status_code} bytes={len(r.text)}")
     r.raise_for_status()
-    seen, urls = jjs_candidates(r.text)
-    print(f"jjs: {len(seen)} links found, {len(urls)} about Iran")
+    seen, iran = jjs_candidates(r.text)
+    articles = [u for u in seen if re.search(r"/content/\d+", u)] or seen
+    urls = iran + [u for u in articles if u not in iran] if JJS_ALL else iran
+    print(f"jjs: {len(seen)} links found, {len(iran)} about Iran, {len(urls)} to read")
     if not urls:
         jjs_debug(r.text)            # الگوی لینک‌ها را در لاگ نشان می‌دهد تا بشود فیلتر را درست کرد
     out, total, cut, skipped = [], 0, 0, 0
@@ -517,12 +558,62 @@ def extract_report(raw):
         raw = raw[m[-1].end():]
     else:
         print("gemini: report marker missing; stripping note lines")
-        raw = re.sub(r"(?m)^(=+.*|- .*)$", "", raw)
+        raw = re.sub(r"(?m)^(=+\s*یادداشت\s*=+|- [^\n]*\|[^\n]*)$", "", raw)
     raw = re.sub(r"(?m)^#+\s*", "", raw)                      # سرفصل ناخواسته
     raw = re.sub(r"(?m)^\* ", "- ", raw)
     raw = re.sub(r"(?m)^(- .*)\n\s*\n(?=- )", r"\1\n", raw)     # خط خالی میان موارد فهرست حذف شود
-    raw = re.sub(r"(?m)^(- .*)\n(?=[^-\n])", r"\1\n\n", raw)          # بعد از فهرست، متن بعدی با یک خط خالی جدا شود
+    raw = re.sub(r"(?m)^(- .*)\n(?=[^-\n>])", r"\1\n\n", raw)          # بعد از فهرست، متن بعدی با یک خط خالی جدا شود
     return re.sub(r"\n{3,}", "\n\n", raw).strip()
+
+
+def _squash(x):
+    """برای مقایسهٔ نقل‌قول با ورودی: ی/ک عربی به فارسی، ارقام فارسی و عربی به لاتین، حذف فاصله، نیم‌فاصله و علائم."""
+    x = _norm(x).translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+    return re.sub(r"[\W_]+", "", x)
+
+
+def verify_quotes(text, source):
+    """هر بلاک نقل‌قول (خط‌های پشت‌سرهمِ «> ») باید عیناً در ورودی مدل (تیترها و متن خبرها) باشد؛
+    اگر نبود، همان بلاک حذف می‌شود تا نقل‌قول ساختگی یا بازنویسی‌شده منتشر نشود. مورد فهرستِ بالای آن می‌ماند
+    (و اگر با «:» تمام شده بود، دو نقطه به نقطه تبدیل می‌شود)."""
+    src = _squash(source)
+
+    def verbatim(block):
+        lines = [re.sub(r"^>\s?", "", l) for l in block]
+        body = " ".join(l for l in lines if not re.match(r"^\s*[—–-]{1,2}\s", l))   # خط گوینده («— ...») بررسی نمی‌شود
+        q = _squash(body)
+        if len(q) >= 12 and q in src:
+            return True
+        print("quote: dropped (not found verbatim in the input):", body.strip()[:70])
+        return False
+
+    out, lines, i = [], text.split("\n"), 0
+    while i < len(lines):
+        if not lines[i].startswith(">"):
+            out.append(lines[i])
+            i += 1
+            continue
+        j = i
+        while j < len(lines) and lines[j].startswith(">"):
+            j += 1
+        if verbatim(lines[i:j]):
+            out += lines[i:j]
+        elif out and out[-1].rstrip().endswith((":", "：")):
+            out[-1] = out[-1].rstrip()[:-1] + "."
+        i = j
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+
+
+OTHERS_RE = re.compile(r"(?m)^\s*=+\s*موضوعات\s*دیگر\s*=+\s*$")
+
+
+def split_others(text):
+    """متن گزارش را به (پیام اول، پیام دوم) تقسیم می‌کند؛ اگر پیام دوم نبود یا خیلی کوتاه بود، دومی خالی است."""
+    m = OTHERS_RE.search(text)
+    if not m:
+        return text.strip(), ""
+    main, others = text[:m.start()].strip(), text[m.end():].strip()
+    return (main, others) if len(others) >= 20 else (main, "")
 
 
 def limits_text(n_src, n_jjs):
@@ -546,10 +637,15 @@ def build_report():
             f"\n[{k}] {j['title']}\nرسانهٔ اصلی: {j['orig']} ({label_for(j['orig'])}) | تاریخ: {j['date']}\nمتن: {j['text']}"
             for k, j in enumerate(jjs, 1))
     mode = MODE_SEARCH if USE_SEARCH else (MODE_TEXTS if jjs else MODE_HEADLINES)
-    raw, srcs = ask_gemini(PROMPT.format(today=tehran_now("%Y-%m-%d"), mode=mode) + lines + extra)
-    text = extract_report(raw)
-    if not text:
+    prev_date, prev_text = load_previous()
+    prev = (PREV_INTRO.format(date=prev_date or "نامشخص") + prev_text + PREV_RULES) if prev_text else ""
+    print("previous report:", f"found ({len(prev_text)} chars, {prev_date})" if prev_text else "none")
+    raw, srcs = ask_gemini(PROMPT.format(today=tehran_now("%Y-%m-%d"), mode=mode) + lines + extra + prev)
+    text = verify_quotes(extract_report(raw), lines + extra)
+    main, others = split_others(text)
+    if not main:
         raise RuntimeError("مدل گزارش خالی برگرداند.")
+    text = main + ("\n\n**موضوعات مهم دیگر**\n" + others if others else "")   # برای صفحهٔ وب و حافظهٔ گزارش بعدی
     print(f"report: {len(text)} chars, {len(text.split())} words")
     srcs = srcs or sorted({i["d"] for i in items})
     if jjs:
@@ -559,19 +655,56 @@ def build_report():
     with LOCK:
         STATE.update(text=text, sources=srcs, links=links, n=len(items) + len(jjs), error="", time=stamp)
     footer = limits_text(len({i["d"] for i in items}), len(jjs)) + ("\nمنبع بخشی از خبرها: جام جمشید (jjs.pub)" if jjs else "")
-    ok = telegram(text, report_header(), footer)
+    ok = telegram([(report_header(), main), (second_header(), others)], footer)
     if ok is False and os.environ.get("GITHUB_ACTIONS"):
         raise RuntimeError("ارسال به تلگرام ناموفق بود؛ علت در خطوط telegram بالاتر در لاگ آمده است.")
     if ok:
-        mark_sent()
+        mark_sent(text)
 
 
-def mark_sent():
-    """بعد از ارسال موفق، تاریخ تهران را در docs/last_sent.txt می‌نویسد تا اجراهای بعدیِ همان روز
-    گزارش تکراری نفرستند (فایل workflow آن را می‌خواند و همراه docs کامیت می‌شود)."""
+def mark_sent(text=""):
+    """بعد از ارسال موفق، تاریخ تهران را در docs/last_sent.txt و متن گزارش را در docs/last_report.txt می‌نویسد.
+    workflow اولی را برای «روزی یک بار» می‌خواند، و گزارش بعدی از دومی می‌فهمد چه چیزی قبلاً گفته شده."""
     if os.path.isdir("docs"):
         with open("docs/last_sent.txt", "w", encoding="utf-8") as f:
             f.write(tehran_now("%Y-%m-%d"))
+        if text:
+            with open("docs/last_report.txt", "w", encoding="utf-8") as f:
+                f.write(text)
+
+
+def load_previous():
+    """(تاریخ، متن) گزارش قبلی؛ اگر نبود (None, None). اگر last_report.txt هنوز نیست، از report.json می‌خواند."""
+    try:
+        date = open("docs/last_sent.txt", encoding="utf-8").read().strip() or None
+    except OSError:
+        date = None
+    text = None
+    try:
+        text = open("docs/last_report.txt", encoding="utf-8").read().strip()
+    except OSError:
+        try:
+            j = json.load(open("docs/report.json", encoding="utf-8"))
+            t = j.get("text") if isinstance(j, dict) else None
+            text = t.strip() if isinstance(t, str) else None
+        except Exception:
+            text = None
+    if not text or len(text) < 100:
+        return None, None
+    return date, text[:3500]
+
+
+PREV_INTRO = (
+    "\n\nگزارش قبلی (تاریخ {date}) که مخاطب آن را خوانده است:\n")
+PREV_RULES = """
+
+قاعدهٔ تازگی (مهم):
+- گزارش جدید باید نشان بدهد از گزارش قبلی تا الان چه عوض شده. پاراگراف اول فقط دربارهٔ تحول تازه یا تغییر وضعیت باشد.
+- چیزی را که در گزارش قبلی آمده و عوض نشده تکرار نکن؛ فقط اگر برای فهم تحول تازه لازم است، در یک جملهٔ کوتاه («همچنان ...») به آن اشاره کن.
+- اگر ادعای گزارش قبلی بعداً تأیید، رد یا اصلاح شده، همین را بنویس.
+- تیتری که تاریخش قدیمی‌تر از گزارش قبلی است خبر تازه نیست، مگر روایت یا مدرک تازه‌ای داشته باشد.
+- اگر تحول مهمی نبوده، صریح و کوتاه بنویس که تغییر مهمی نبوده و وضعیت چه است؛ گزارش را با تکرار گزارش قبلی پر نکن (می‌تواند کوتاه‌تر شود).
+"""
 
 
 def loop():
@@ -598,7 +731,7 @@ button:disabled{opacity:.6}button:focus-visible{outline:3px solid var(--ink);out
 #r{background:var(--card);border-radius:8px;padding:.5rem 1.25rem 1rem;margin-top:1rem}
 h2{font-size:1.05rem;color:var(--acc);margin:1.5rem 0 .2rem}
 #r>p:first-child{font-size:1.1rem;border-right:4px solid var(--acc);padding-right:.9rem}
-p{margin:.4rem 0}li{list-style:disc inside;margin:.35rem .4rem}
+p{margin:.4rem 0}li{list-style:disc inside;margin:.35rem .4rem}\nblockquote{margin:.5rem 0;padding:.4rem .8rem;border-right:3px solid var(--mute);color:var(--mute);background:rgba(127,127,127,.08);border-radius:4px}
 #l{margin-top:1rem;font-size:.9rem}#l a{color:var(--acc)}\n</style></head><body><main>
 <header><h1>تحلیل نظامی ایران</h1><button id="b" onclick="refresh()">تحلیل تازه</button></header>
 <div id="m"></div><div id="r"><p>در حال بارگذاری…</p></div>
@@ -609,8 +742,8 @@ const $=s=>document.querySelector(s);
 function md(t){return t.split('\\n').map(l=>{
  l=l.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\\*\\*(.+?)\\*\\*/g,'<b>$1</b>');
  if(l.startsWith('## '))return '<h2>'+l.slice(3)+'</h2>';
- if(/^[-*] /.test(l))return '<li>'+l.slice(2)+'</li>';
- return l.trim()?'<p>'+l+'</p>':''}).join('')}
+ if(l.startsWith('> '))return '<blockquote>'+l.slice(2)+'</blockquote>';\n if(/^[-*] /.test(l))return '<li>'+l.slice(2)+'</li>';
+ return l.trim()?'<p>'+l+'</p>':''}).join('').replace(/<\\/blockquote><blockquote>/g,'<br>')}
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
 function render2(d){
  const L=d.links||[];
