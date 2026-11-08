@@ -14,6 +14,7 @@ button:disabled{opacity:.6}button:focus-visible{outline:3px solid var(--ink);out
 h2{font-size:1.05rem;color:var(--acc);margin:1.5rem 0 .2rem}
 #r>p:first-child{font-size:1.1rem;border-right:4px solid var(--acc);padding-right:.9rem}
 p{margin:.4rem 0}li{list-style:disc inside;margin:.35rem .4rem}
+blockquote{margin:.5rem 0;padding:.4rem .8rem;border-right:3px solid var(--mute);color:var(--mute);background:rgba(127,127,127,.08);border-radius:4px}
 #l{margin-top:1rem;font-size:.9rem}#l a{color:var(--acc)}
 </style></head><body><main>
 <header><h1>تحلیل نظامی ایران</h1></header>
@@ -25,8 +26,9 @@ const $=s=>document.querySelector(s);
 function md(t){return t.split('\n').map(l=>{
  l=l.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\*\*(.+?)\*\*/g,'<b>$1</b>');
  if(l.startsWith('## '))return '<h2>'+l.slice(3)+'</h2>';
+ if(l.startsWith('> '))return '<blockquote>'+l.slice(2)+'</blockquote>';
  if(/^[-*] /.test(l))return '<li>'+l.slice(2)+'</li>';
- return l.trim()?'<p>'+l+'</p>':''}).join('')}
+ return l.trim()?'<p>'+l+'</p>':''}).join('').replace(/<\/blockquote><blockquote>/g,'<br>')}
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
 function render2(d){
  const L=d.links||[];
