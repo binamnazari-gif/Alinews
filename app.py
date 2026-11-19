@@ -708,7 +708,7 @@ def load_previous():
         date = None
     text = None
     try:
-        text = open("docs/last_report.txt", "utf-8").read().strip()
+        text = open("docs/last_report.txt", encoding="utf-8").read().strip()
     except OSError:
         try:
             j = json.load(open("docs/report.json", encoding="utf-8"))
