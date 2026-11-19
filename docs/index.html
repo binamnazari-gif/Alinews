@@ -24,7 +24,7 @@ blockquote{margin:.5rem 0;padding:.4rem .8rem;border-right:3px solid var(--mute)
 </main><script>
 const $=s=>document.querySelector(s);
 function md(t){return t.split('\n').map(l=>{
- l=l.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\*\*(.+?)\*\*/g,'<b>$1</b>');
+ l=l.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
  if(l.startsWith('## '))return '<h2>'+l.slice(3)+'</h2>';
  if(l.startsWith('> '))return '<blockquote>'+l.slice(2)+'</blockquote>';
  if(/^[-*] /.test(l))return '<li>'+l.slice(2)+'</li>';
